@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dark Maze: Stealth POV</title>
+    <style>
+        :root { --gold: #ffd700; --exit: #ff4444; --health: #ff3333; }
+        body, html { margin: 0; padding: 0; background: #000; color: white; font-family: 'Courier New', monospace; overflow: hidden; }
+        
+        .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; background: #000; }
+        .hidden { display: none !important; }
+
+        .btn { background: transparent; border: 2px solid white; color: white; padding: 15px 30px; margin: 10px; cursor: pointer; font-size: 1.2rem; }
+        .btn:hover { background: white; color: black; }
+
+        /* Level Grid */
+        #level-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px; }
+        .level-btn { width: 60px; height: 60px; border: 1px solid white; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+        /* HUD */
+        #game-ui { position: fixed; top: 20px; left: 20px; z-index: 50; }
+        .bar-container { width: 150px; height: 12px; border: 1px solid #444; margin: 5px 0; background: #111; }
+        #health-fill { width: 100%; height: 100%; background: var(--health); transition: width 0.2s; }
+        #batt-fill { width: 100%; height: 100%; background: #00ff00; transition: width 0.1s; }
+
+        /* Entities */
+        #world { position: absolute; }
+        .wall { position: absolute; background: #111; border: 1px solid #222; }
+        .exit-zone { position: absolute; background: var(--exit); box-shadow: 0 0 30px var(--exit); }
+        .guard { position: absolute; width: 25px; height: 25px; background: #700; border-radius: 50%; box-shadow: 0 0 15px #f00; }
+        
+        #flashlight {
+            position: fixed; inset: 0; pointer-events: none; z-index: 40;
+            background: radial-gradient(circle 160px at 50% 50%, rgba(255,255,220,0.4) 0%, rgba(0,0,0,1) 100%);
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="menu" class="screen">
+        <h1>DARK STEALTH</h1>
+        <button class="btn" onclick="showLevels()">START</button>
+    </div>
+
+    <div id="level-screen" class="screen hidden">
+        <h2>SELECT LEVEL</h2>
+        <div id="level-grid"></div>
+    </div>
+
+    <div id="game-ui" class="hidden">
+        <div>HEALTH</div>
+        <div class="bar-container"><div id="health-fill"></div></div>
+        <div>BATTERY</div>
+        <div class="bar-container"><div id="batt-fill"></div></div>
+        <div style="margin-top:10px; color:#666">[BACKSPACE] Flashlight</div>
+    </div>
+
+    <div id="flashlight"></div>
+    <div id="world"></div>
+
+<script>
+    let health = 100;
+    let battery = 100;
+    let lightOn = false;
+    let playerPos = { x: 100, y: 100 };
+    let walls = [], guards = [];
+    let exitRect = null;
+    let gameActive = false;
+
+    function showLevels() {
+        document.getElementById('menu').classList.add('hidden');
+        document.getElementById('level-screen').classList.remove('hidden');
+        const grid = document.getElementById('level-grid');
+        grid.innerHTML = '';
+        for(let i=1; i<=10; i++) grid.innerHTML += `<div class="level-btn" onclick="startGame(${i})">${i}</div>`;
+    }
+
+    function startGame(lvl) {
+        document.getElementById('level-screen').classList.add('hidden');
+        document.getElementById('game-ui').classList.remove('hidden');
+        reset(lvl);
+        gameActive = true;
+        requestAnimationFrame(loop);
+    }
+
+    function reset(lvl) {
+        health = 100; battery = 100;
+        playerPos = { x: 100, y: 100 };
+        guards = []; walls = [];
+        const world = document.getElementById('world');
+        world.innerHTML = '';
+
+        // Create random walls
+        for(let i=0; i<10+lvl; i++) {
+            let x = Math.random()*1500, y = Math.random()*1500, w = 200, h = 40;
+            if(Math.random() > 0.5) [w,h] = [h,w]; 
+            const wall = document.createElement('div');
+            wall.className = 'wall';
+            wall.style.cssText = `left:${x}px; top:${y}px; width:${w}px; height:${h}px;`;
+            world.appendChild(wall);
+            walls.push({x,y,w,h});
+        }
+
+        // Create Patrol Guards
+        for(let i=0; i < lvl; i++) {
+            const g = { 
+                x: Math.random()*1000 + 200, 
+                y: Math.random()*1000 + 200, 
+                startX: 0, 
+                dir: 1,
+                el: document.createElement('div') 
+            };
+            g.startX = g.x;
+            g.el.className = 'guard';
+            world.appendChild(g.el);
+            guards.push(g);
+        }
+
+        // Exit
+        exitRect = { x: 1400, y: 1400, w: 60, h: 60 };
+        const ex = document.createElement('div');
+        ex.className = 'exit-zone';
+        ex.style.cssText = `left:1400px; top:1400px; width:60px; height:60px;`;
+        world.appendChild(ex);
+    }
+
+    const keys = {};
+    window.onkeydown = e => {
+        keys[e.key.toLowerCase()] = true;
+        if(e.key === "Backspace") {
+            e.preventDefault();
+            lightOn = !lightOn;
+            document.getElementById('flashlight').style.display = lightOn ? 'block' : 'none';
+        }
+    }
+    window.onkeyup = e => keys[e.key.toLowerCase()] = false;
+
+    function loop() {
+        if(!gameActive) return;
+
+        let nx = playerPos.x, ny = playerPos.y;
+        if(keys['w']) ny -= 5; if(keys['s']) ny += 5;
+        if(keys['a']) nx -= 5; if(keys['d']) nx += 5;
+
+        // Wall Collision
+        let hit = false;
+        walls.forEach(w => {
+            if(nx < w.x+w.w && nx+20 > w.x && ny < w.y+w.h && ny+20 > w.y) hit = true;
+        });
+        if(!hit) { playerPos.x = nx; playerPos.y = ny; }
+
+        // Guard AI & Damage
+        guards.forEach(g => {
+            g.x += 2 * g.dir;
+            if(Math.abs(g.x - g.startX) > 200) g.dir *= -1;
+            g.el.style.left = g.x + 'px';
+            g.el.style.top = g.y + 'px';
+
+            // Check distance to player
+            let dist = Math.hypot(g.x - playerPos.x, g.y - playerPos.y);
+            if(dist < 60) {
+                health -= 1; // Take damage if close
+                document.body.style.backgroundColor = "#200"; // Red flash
+            } else {
+                document.body.style.backgroundColor = "#000";
+            }
+        });
+
+        // UI Updates
+        document.getElementById('health-fill').style.width = health + "%";
+        if(lightOn) battery -= 0.1;
+        document.getElementById('batt-fill').style.width = battery + "%";
+
+        if(health <= 0) {
+            alert("CAUGHT IN THE DARK!");
+            location.reload();
+        }
+
+        // Win check
+        if(playerPos.x > exitRect.x && playerPos.y > exitRect.y) {
+            alert("LEVEL COMPLETE!");
+            showLevels();
+            gameActive = false;
+        }
+
+        document.getElementById('world').style.transform = `translate(${-playerPos.x + window.innerWidth/2}px, ${-playerPos.y + window.innerHeight/2}px)`;
+        requestAnimationFrame(loop);
+    }
+</script>
+</body>
+</html>
