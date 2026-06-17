@@ -1,1 +1,1 @@
-# Kolibyi.github.io
+# StudyAI.github.io
